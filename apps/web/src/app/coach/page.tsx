@@ -19,6 +19,8 @@ interface Course {
   title: string;
   description?: string | null;
   subject: Subject;
+  students?: Student[];
+  studentIds?: number[];
 }
 
 interface Lesson {
@@ -86,8 +88,11 @@ export default function CoachPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [studentsLoading, setStudentsLoading] = useState(true);
+  const [studentLoadError, setStudentLoadError] = useState<string | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState<number | null>(null);
+  const [newCourseStudentIds, setNewCourseStudentIds] = useState<number[]>([]);
   const [pathLessons, setPathLessons] = useState<Lesson[]>([]);
   const [questions, setQuestions] = useState<Question[]>([emptyQuestion()]);
   const [message, setMessage] = useState<string | null>(null);
@@ -99,19 +104,32 @@ export default function CoachPage() {
   );
 
   async function loadWorkspace() {
-    const [subjectData, courseData, lessonData, studentData, assignmentData] = await Promise.all([
+    const [subjectData, courseData, lessonData, assignmentData] = await Promise.all([
       apiRequest<{ subjects: Subject[] }>("/subjects"),
       apiRequest<{ courses: Course[] }>("/courses"),
       apiRequest<{ lessons: Lesson[] }>("/lessons"),
-      apiRequest<{ students: Student[] }>("/users/students"),
       apiRequest<{ items: Assignment[] }>("/assignments?pageSize=8")
     ]);
     setSubjects(subjectData.subjects);
     setCourses(courseData.courses);
     setLessons(lessonData.lessons);
-    setStudents(studentData.students);
     setAssignments(assignmentData.items);
-    setSelectedStudentId((current) => current ?? studentData.students[0]?.id ?? null);
+    await loadStudents();
+  }
+
+  async function loadStudents() {
+    setStudentsLoading(true);
+    setStudentLoadError(null);
+    try {
+      const studentData = await apiRequest<{ students: Student[] }>("/users/students");
+      setStudents(studentData.students);
+      setSelectedStudentId((current) => current ?? studentData.students[0]?.id ?? null);
+    } catch (error) {
+      setStudents([]);
+      setStudentLoadError(error instanceof Error ? error.message : "Could not load students.");
+    } finally {
+      setStudentsLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -153,11 +171,23 @@ export default function CoachPage() {
         body: JSON.stringify({
           subjectId: form.get("subjectId"),
           title: form.get("title"),
-          description: form.get("description")
+          description: form.get("description"),
+          studentIds: newCourseStudentIds
         })
       });
       event.currentTarget.reset();
+      setNewCourseStudentIds([]);
       await loadWorkspace();
+    });
+  }
+
+  async function handleUpdateCourseStudents(course: Course, studentIds: number[]) {
+    await runAction("Course students updated.", async () => {
+      const { course: updatedCourse } = await apiRequest<{ course: Course }>(`/courses/${course.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ studentIds })
+      });
+      setCourses((items) => items.map((item) => (item.id === updatedCourse.id ? updatedCourse : item)));
     });
   }
 
@@ -357,8 +387,33 @@ export default function CoachPage() {
               </Select>
               <Input name="title" placeholder="Algebra fundamentals" required />
               <Input name="description" placeholder="Description" />
+              <StudentChecklist
+                disabled={loading}
+                error={studentLoadError}
+                loading={studentsLoading}
+                onChange={setNewCourseStudentIds}
+                selectedIds={newCourseStudentIds}
+                students={students}
+              />
               <Button disabled={loading}>Create course</Button>
             </form>
+            <div className="mt-5 space-y-3">
+              {courses.length === 0 ? (
+                <p className="text-sm text-muted">No courses yet.</p>
+              ) : (
+                courses.map((course) => (
+                  <CourseStudentEditor
+                    course={course}
+                    disabled={loading}
+                    error={studentLoadError}
+                    key={course.id}
+                    loading={studentsLoading}
+                    onSave={(studentIds) => handleUpdateCourseStudents(course, studentIds)}
+                    students={students}
+                  />
+                ))
+              )}
+            </div>
           </Panel>
 
           <Panel title="Lessons">
@@ -542,6 +597,133 @@ export default function CoachPage() {
         </section>
       </div>
     </AppShell>
+  );
+}
+
+function CourseStudentEditor({
+  course,
+  disabled,
+  error,
+  loading,
+  onSave,
+  students
+}: {
+  course: Course;
+  disabled?: boolean;
+  error: string | null;
+  loading: boolean;
+  onSave: (studentIds: number[]) => Promise<void>;
+  students: Student[];
+}) {
+  const [draftIds, setDraftIds] = useState<number[]>(course.studentIds ?? []);
+
+  useEffect(() => {
+    setDraftIds(course.studentIds ?? []);
+  }, [course.id, course.studentIds]);
+
+  return (
+    <details className="rounded-md border border-line bg-surface p-3 text-sm">
+      <summary className="cursor-pointer font-medium">
+        {course.subject.name} / {course.title} - {course.studentIds?.length ?? 0} students
+      </summary>
+      <div className="mt-3 grid gap-3">
+        <StudentChecklist
+          disabled={disabled}
+          error={error}
+          loading={loading}
+          onChange={setDraftIds}
+          selectedIds={draftIds}
+          students={students}
+        />
+        <Button disabled={disabled || loading} onClick={() => onSave(draftIds)} type="button">
+          Save students
+        </Button>
+      </div>
+    </details>
+  );
+}
+
+function StudentChecklist({
+  disabled,
+  error,
+  loading,
+  onChange,
+  selectedIds,
+  students
+}: {
+  disabled?: boolean;
+  error: string | null;
+  loading: boolean;
+  onChange: (studentIds: number[]) => void;
+  selectedIds: number[];
+  students: Student[];
+}) {
+  const [query, setQuery] = useState("");
+  const filteredStudents = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return students;
+    }
+
+    return students.filter((student) =>
+      `${student.fullName} ${student.email} ${student.username}`.toLowerCase().includes(normalizedQuery)
+    );
+  }, [query, students]);
+
+  function toggleStudent(studentId: number) {
+    if (selectedIds.includes(studentId)) {
+      onChange(selectedIds.filter((id) => id !== studentId));
+      return;
+    }
+
+    onChange([...selectedIds, studentId]);
+  }
+
+  if (loading) {
+    return <p className="rounded-md border border-line bg-white px-3 py-2 text-sm text-muted">Đang tải danh sách học sinh...</p>;
+  }
+
+  if (error) {
+    return <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>;
+  }
+
+  if (students.length === 0) {
+    return <p className="rounded-md border border-line bg-white px-3 py-2 text-sm text-muted">Chưa có học sinh trong hệ thống</p>;
+  }
+
+  return (
+    <div className="rounded-md border border-line bg-white p-3">
+      <Input
+        className="w-full"
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Search students by name or email"
+        value={query}
+      />
+      <div className="mt-3 max-h-52 space-y-2 overflow-y-auto pr-1">
+        {filteredStudents.length === 0 ? (
+          <p className="text-sm text-muted">No students match this search.</p>
+        ) : (
+          filteredStudents.map((student) => (
+            <label
+              className="flex items-start gap-3 rounded-md border border-line bg-surface px-3 py-2 text-sm"
+              key={student.id}
+            >
+              <input
+                checked={selectedIds.includes(student.id)}
+                className="mt-1"
+                disabled={disabled}
+                onChange={() => toggleStudent(student.id)}
+                type="checkbox"
+              />
+              <span>
+                <span className="block font-medium">{student.fullName}</span>
+                <span className="block text-xs text-muted">{student.email || student.username}</span>
+              </span>
+            </label>
+          ))
+        )}
+      </div>
+    </div>
   );
 }
 

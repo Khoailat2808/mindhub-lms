@@ -26,6 +26,8 @@ model User {
   notifications         Notification[]
   scheduleItems         ScheduleItem[]
   createdAssignments    Assignment[]            @relation("AssignmentCreator")
+  courseEnrollments     CourseStudent[]          @relation("CourseStudent")
+  assignedCourseStudents CourseStudent[]         @relation("CourseStudentAssigner")
 
   @@index([role])
   @@map("users")
@@ -54,10 +56,27 @@ model Course {
   lessons     Lesson[]
   assignments Assignment[]
   scheduleItems ScheduleItem[]
+  enrollments CourseStudent[]
 
   @@index([subjectId])
   @@index([teacherName])
   @@map("courses")
+}
+
+model CourseStudent {
+  id         Int      @id @default(autoincrement())
+  courseId   Int      @map("course_id")
+  studentId  Int      @map("student_id")
+  assignedBy Int?     @map("assigned_by")
+  createdAt  DateTime @default(now()) @map("created_at")
+  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student    User     @relation("CourseStudent", fields: [studentId], references: [id])
+  assigner   User?    @relation("CourseStudentAssigner", fields: [assignedBy], references: [id], onDelete: SetNull)
+
+  @@unique([courseId, studentId])
+  @@index([studentId])
+  @@index([assignedBy])
+  @@map("course_students")
 }
 
 model Lesson {

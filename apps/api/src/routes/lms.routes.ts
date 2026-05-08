@@ -20,6 +20,13 @@ import { toPublicUploadPath, uploadLessonFiles } from "../utils/uploads.js";
 export const lmsRoutes = Router();
 
 const teacherRoles = requireRoles("teacher", "coach", "admin");
+const studentListSelect = {
+  id: true,
+  username: true,
+  email: true,
+  fullName: true,
+  role: true
+} satisfies Prisma.UserSelect;
 
 function isTeacherRole(role: string | undefined) {
   return role === "teacher" || role === "coach";
@@ -45,16 +52,37 @@ function studentVisibilityWhere(user: AuthenticatedUser | undefined): Prisma.Use
   if (isTeacherRole(user.role)) {
     return {
       role: "student",
-      assignedLessons: {
-        some: {
-          lesson: {
-            course: {
-              teacherName: user.fullName
+      OR: [
+        {
+          assignedLessons: {
+            some: {
+              lesson: {
+                course: {
+                  teacherName: user.fullName
+                }
+              }
+            }
+          }
+        },
+        {
+          courseEnrollments: {
+            some: {
+              course: {
+                teacherName: user.fullName
+              }
             }
           }
         }
-      }
+      ]
     };
+  }
+
+  return { id: user.id, role: "student" };
+}
+
+function studentDirectoryWhere(user: AuthenticatedUser | undefined): Prisma.UserWhereInput {
+  if (!user || user.role === "admin" || isTeacherRole(user.role)) {
+    return { role: "student" };
   }
 
   return { id: user.id, role: "student" };
@@ -70,10 +98,15 @@ async function assertCanAccessStudent(user: AuthenticatedUser | undefined, stude
   }
 
   if (isTeacherRole(user.role)) {
-    const assigned = await prisma.learningPath.count({
-      where: { studentId, lesson: { course: { teacherName: user.fullName } } }
-    });
-    if (assigned > 0) {
+    const [assigned, enrolled] = await Promise.all([
+      prisma.learningPath.count({
+        where: { studentId, lesson: { course: { teacherName: user.fullName } } }
+      }),
+      prisma.courseStudent.count({
+        where: { studentId, course: { teacherName: user.fullName } }
+      })
+    ]);
+    if (assigned > 0 || enrolled > 0) {
       return;
     }
   }
@@ -186,6 +219,69 @@ function parseJsonArray<T>(value: unknown, field: string): T[] {
   }
 }
 
+function parseStudentIds(body: Record<string, unknown>) {
+  if (!Object.prototype.hasOwnProperty.call(body, "studentIds")) {
+    return undefined;
+  }
+
+  const studentIds = parseJsonArray<number>(body.studentIds, "studentIds").map((id) =>
+    parsePositiveInt(id, "studentId")
+  );
+
+  if (new Set(studentIds).size !== studentIds.length) {
+    throw new HttpError(400, "studentIds cannot contain duplicate students.");
+  }
+
+  return studentIds;
+}
+
+async function validateStudentIds(tx: Prisma.TransactionClient, studentIds: number[]) {
+  if (studentIds.length === 0) {
+    return;
+  }
+
+  const students = await tx.user.findMany({
+    where: { id: { in: studentIds }, role: "student" },
+    select: { id: true }
+  });
+  const validIds = new Set(students.map((student) => student.id));
+  const invalidIds = studentIds.filter((id) => !validIds.has(id));
+
+  if (invalidIds.length > 0) {
+    throw new HttpError(400, "studentIds must only contain existing student users.");
+  }
+}
+
+async function syncCourseStudents(
+  tx: Prisma.TransactionClient,
+  courseId: number,
+  studentIds: number[] | undefined,
+  assignedBy: number
+) {
+  if (studentIds === undefined) {
+    return;
+  }
+
+  await validateStudentIds(tx, studentIds);
+
+  const existing = await tx.courseStudent.findMany({
+    where: { courseId },
+    select: { studentId: true }
+  });
+  const existingIds = new Set(existing.map((item) => item.studentId));
+  const nextIds = new Set(studentIds);
+  const toRemove = existing.filter((item) => !nextIds.has(item.studentId)).map((item) => item.studentId);
+  const toAdd = studentIds.filter((studentId) => !existingIds.has(studentId));
+
+  if (toRemove.length > 0) {
+    await tx.courseStudent.deleteMany({ where: { courseId, studentId: { in: toRemove } } });
+  }
+
+  for (const studentId of toAdd) {
+    await tx.courseStudent.create({ data: { courseId, studentId, assignedBy } });
+  }
+}
+
 function validateVideo(videoType: string, videoUrl: string | null, videoFile?: Express.Multer.File) {
   if (!isVideoType(videoType)) {
     throw new HttpError(400, "Invalid video type.");
@@ -289,6 +385,28 @@ function lessonInclude() {
     questions: true,
     materials: true
   } satisfies Prisma.LessonInclude;
+}
+
+function courseInclude() {
+  return {
+    subject: true,
+    lessons: true,
+    enrollments: {
+      orderBy: { createdAt: "asc" as const },
+      include: { student: { select: studentListSelect } }
+    }
+  } satisfies Prisma.CourseInclude;
+}
+
+function courseDto<TCourse extends { enrollments?: { student: { id: number } }[] }>(course: TCourse) {
+  const students = course.enrollments?.map((enrollment) => enrollment.student) ?? [];
+
+  return {
+    ...course,
+    enrollments: undefined,
+    students,
+    studentIds: students.map((student) => student.id)
+  };
 }
 
 function hideCorrectAnswers<TLesson extends { questions?: Question[] }>(lesson: TLesson) {
@@ -489,9 +607,9 @@ lmsRoutes.get(
   teacherRoles,
   asyncRoute(async (request, response) => {
     const students = await prisma.user.findMany({
-      where: studentVisibilityWhere(request.user),
+      where: studentDirectoryWhere(request.user),
       orderBy: { fullName: "asc" },
-      select: { id: true, username: true, email: true, fullName: true, role: true }
+      select: studentListSelect
     });
 
     response.json({ students });
@@ -564,9 +682,9 @@ lmsRoutes.get(
     const courses = await prisma.course.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      include: { subject: true, lessons: true }
+      include: courseInclude()
     });
-    response.json({ courses });
+    response.json({ courses: courses.map(courseDto) });
   })
 );
 
@@ -575,19 +693,28 @@ lmsRoutes.post(
   requireAuth,
   teacherRoles,
   asyncRoute(async (request, response) => {
-    const course = await prisma.course.create({
-      data: {
-        subjectId: parsePositiveInt(request.body.subjectId, "subjectId"),
-        title: requireString(request.body.title, "title"),
-        description: optionalString(request.body.description),
-        teacherName:
-          request.user?.role === "admin"
-            ? optionalString(request.body.teacherName) ?? request.user?.fullName ?? null
-            : request.user?.fullName ?? null
-      },
-      include: { subject: true }
+    const studentIds = parseStudentIds(request.body);
+    const course = await prisma.$transaction(async (tx) => {
+      const created = await tx.course.create({
+        data: {
+          subjectId: parsePositiveInt(request.body.subjectId, "subjectId"),
+          title: requireString(request.body.title, "title"),
+          description: optionalString(request.body.description),
+          teacherName:
+            request.user?.role === "admin"
+              ? optionalString(request.body.teacherName) ?? request.user?.fullName ?? null
+              : request.user?.fullName ?? null
+        }
+      });
+
+      await syncCourseStudents(tx, created.id, studentIds, request.user!.id);
+
+      return tx.course.findUnique({
+        where: { id: created.id },
+        include: courseInclude()
+      });
     });
-    response.status(201).json({ course });
+    response.status(201).json({ course: courseDto(course!) });
   })
 );
 
@@ -605,21 +732,30 @@ lmsRoutes.patch(
       throw new HttpError(404, "Course not found.");
     }
 
-    const updated = await prisma.course.update({
-      where: { id: courseId },
-      data: {
-        subjectId: parseOptionalPositiveInt(request.body.subjectId) ?? course.subjectId,
-        title: optionalString(request.body.title) ?? course.title,
-        description: optionalString(request.body.description) ?? course.description,
-        teacherName:
-          request.user?.role === "admin"
-            ? optionalString(request.body.teacherName) ?? course.teacherName
-            : course.teacherName
-      },
-      include: { subject: true, lessons: true }
+    const studentIds = parseStudentIds(request.body);
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.course.update({
+        where: { id: courseId },
+        data: {
+          subjectId: parseOptionalPositiveInt(request.body.subjectId) ?? course.subjectId,
+          title: optionalString(request.body.title) ?? course.title,
+          description: optionalString(request.body.description) ?? course.description,
+          teacherName:
+            request.user?.role === "admin"
+              ? optionalString(request.body.teacherName) ?? course.teacherName
+              : course.teacherName
+        }
+      });
+
+      await syncCourseStudents(tx, courseId, studentIds, request.user!.id);
+
+      return tx.course.findUnique({
+        where: { id: courseId },
+        include: courseInclude()
+      });
     });
 
-    response.json({ course: updated });
+    response.json({ course: courseDto(updated!) });
   })
 );
 
@@ -878,6 +1014,10 @@ lmsRoutes.put(
       throw new HttpError(404, "Student not found.");
     }
 
+    if (request.user?.role !== "admin") {
+      await assertCanAccessStudent(request.user, studentId);
+    }
+
     if (new Set(lessonIds).size !== lessonIds.length) {
       throw new HttpError(400, "Learning path cannot contain duplicate lessons.");
     }
@@ -1034,6 +1174,7 @@ lmsRoutes.delete(
 
     const relatedRecords = await Promise.all([
       prisma.learningPath.count({ where: { OR: [{ studentId: userId }, { assignedBy: userId }] } }),
+      prisma.courseStudent.count({ where: { OR: [{ studentId: userId }, { assignedBy: userId }] } }),
       prisma.studentLessonProgress.count({ where: { studentId: userId } }),
       prisma.assignment.count({ where: { createdBy: userId } }),
       prisma.assignmentSubmission.count({ where: { studentId: userId } })
@@ -1289,13 +1430,19 @@ lmsRoutes.post(
 );
 
 async function studentCourseAndLessonIds(studentId: number) {
-  const path = await prisma.learningPath.findMany({
-    where: { studentId, lesson: { isActive: true } },
-    select: { lessonId: true, lesson: { select: { courseId: true } } }
-  });
+  const [path, enrollments] = await Promise.all([
+    prisma.learningPath.findMany({
+      where: { studentId, lesson: { isActive: true } },
+      select: { lessonId: true, lesson: { select: { courseId: true } } }
+    }),
+    prisma.courseStudent.findMany({
+      where: { studentId },
+      select: { courseId: true }
+    })
+  ]);
 
   return {
-    courseIds: Array.from(new Set(path.map((item) => item.lesson.courseId))),
+    courseIds: Array.from(new Set([...path.map((item) => item.lesson.courseId), ...enrollments.map((item) => item.courseId)])),
     lessonIds: path.map((item) => item.lessonId)
   };
 }
@@ -1463,17 +1610,37 @@ lmsRoutes.get(
   requireRoles("student"),
   asyncRoute(async (request, response) => {
     const studentId = request.user!.id;
-    const path = await prisma.learningPath.findMany({
-      where: { studentId },
-      include: { lesson: { include: { course: { include: { subject: true } } } } },
-      orderBy: { orderIndex: "asc" }
-    });
-    const progress = await prisma.studentLessonProgress.findMany({ where: { studentId } });
+    const [path, enrollments, progress] = await Promise.all([
+      prisma.learningPath.findMany({
+        where: { studentId },
+        include: { lesson: { include: { course: { include: { subject: true } } } } },
+        orderBy: { orderIndex: "asc" }
+      }),
+      prisma.courseStudent.findMany({
+        where: { studentId },
+        include: { course: { include: { subject: true, lessons: { where: { isActive: true } } } } },
+        orderBy: { createdAt: "desc" }
+      }),
+      prisma.studentLessonProgress.findMany({ where: { studentId } })
+    ]);
     const completedIds = new Set(progress.filter((item) => item.completed).map((item) => item.lessonId));
     const courseMap = new Map<number, { course: unknown; totalLessons: number; completedLessons: number }>();
+    const enrolledCourseIds = new Set(enrollments.map((enrollment) => enrollment.courseId));
+
+    for (const enrollment of enrollments) {
+      const course = enrollment.course;
+      courseMap.set(course.id, {
+        course,
+        totalLessons: course.lessons.length,
+        completedLessons: course.lessons.filter((lesson) => completedIds.has(lesson.id)).length
+      });
+    }
 
     for (const item of path) {
       const course = item.lesson.course;
+      if (enrolledCourseIds.has(course.id)) {
+        continue;
+      }
       const current = courseMap.get(course.id) ?? {
         course,
         totalLessons: 0,
@@ -1495,12 +1662,22 @@ lmsRoutes.get(
   asyncRoute(async (request, response) => {
     const studentId = request.user!.id;
     const courseId = parsePositiveInt(request.params.courseId, "courseId");
-    const path = await prisma.learningPath.findMany({
-      where: { studentId, lesson: { courseId, isActive: true } },
-      orderBy: { orderIndex: "asc" },
-      include: { lesson: { include: lessonInclude() } }
-    });
-    const progress = await prisma.studentLessonProgress.findMany({ where: { studentId } });
+    const [enrollment, path, progress] = await Promise.all([
+      prisma.courseStudent.findUnique({
+        where: { courseId_studentId: { courseId, studentId } },
+        select: { id: true }
+      }),
+      prisma.learningPath.findMany({
+        where: { studentId, lesson: { courseId, isActive: true } },
+        orderBy: { orderIndex: "asc" },
+        include: { lesson: { include: lessonInclude() } }
+      }),
+      prisma.studentLessonProgress.findMany({ where: { studentId } })
+    ]);
+
+    if (!enrollment && path.length === 0) {
+      throw new HttpError(403, "Course is not assigned to this student.");
+    }
 
     response.json({ path: hidePathCorrectAnswers(path), progress });
   })
