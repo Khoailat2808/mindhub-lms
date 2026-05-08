@@ -91,6 +91,7 @@ Create a Railway project with two empty services:
 
 For `mindhub-api` service settings:
 
+- Root Directory: leave empty / repository root (`/`)
 - Config file path: `/railway.api.json`
 - Add a volume mounted at `/data`
 - Public networking enabled
@@ -116,6 +117,7 @@ ADMIN_PASSWORD=<temporary-strong-password>
 
 For `mindhub-web` service settings:
 
+- Root Directory: leave empty / repository root (`/`)
 - Config file path: `/railway.web.json`
 - Public networking enabled
 - Variables:

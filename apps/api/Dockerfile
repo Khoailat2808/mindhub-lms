@@ -24,4 +24,4 @@ COPY --from=build /app/apps/api/dist apps/api/dist
 COPY --from=build /app/apps/api/prisma apps/api/prisma
 RUN mkdir -p /data/uploads/videos /data/uploads/materials
 EXPOSE 4000
-CMD ["npm", "run", "start", "--workspace", "@lms/api"]
+CMD ["npm", "run", "start:railway", "--workspace", "@lms/api"]
