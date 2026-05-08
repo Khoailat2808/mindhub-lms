@@ -12,17 +12,27 @@ export const app = express();
 
 ensureUploadDirs();
 
+function normalizeOrigin(origin: string) {
+  return origin.trim().replace(/\/+$/, "");
+}
+
 const allowedOrigins = env.corsOrigin
   .split(",")
-  .map((origin) => origin.trim())
+  .map(normalizeOrigin)
   .filter(Boolean);
+const allowsAnyOrigin = allowedOrigins.includes("*");
 
 app.set("trust proxy", 1);
 app.use(securityHeaders);
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || env.nodeEnv !== "production" || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        env.nodeEnv !== "production" ||
+        allowsAnyOrigin ||
+        allowedOrigins.includes(normalizeOrigin(origin))
+      ) {
         callback(null, true);
         return;
       }
