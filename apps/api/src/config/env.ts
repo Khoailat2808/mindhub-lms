@@ -11,5 +11,9 @@ export const env = {
   uploadMaterialDir: process.env.UPLOAD_MATERIAL_DIR ?? "uploads/materials",
   maxVideoUploadMb: Number(process.env.MAX_VIDEO_UPLOAD_MB ?? 100),
   maxMaterialUploadMb: Number(process.env.MAX_MATERIAL_UPLOAD_MB ?? 20),
-  maxLessonMaterialsTotalMb: Number(process.env.MAX_LESSON_MATERIALS_TOTAL_MB ?? 50)
+  maxLessonMaterialsTotalMb: Number(process.env.MAX_LESSON_MATERIALS_TOTAL_MB ?? 50),
+  adminUsername: process.env.ADMIN_USERNAME ?? "admin",
+  adminEmail: process.env.ADMIN_EMAIL ?? "admin@mindhub.test",
+  adminPassword: process.env.ADMIN_PASSWORD ?? "",
+  adminFullName: process.env.ADMIN_FULL_NAME ?? "MindHub Admin"
 };
