@@ -1,0 +1,16 @@
+CREATE INDEX "users_role_idx" ON "users"("role");
+CREATE INDEX "courses_subject_id_idx" ON "courses"("subject_id");
+CREATE INDEX "courses_teacher_name_idx" ON "courses"("teacher_name");
+CREATE INDEX "lessons_course_id_idx" ON "lessons"("course_id");
+CREATE INDEX "lessons_is_active_idx" ON "lessons"("is_active");
+CREATE INDEX "learning_paths_lesson_id_idx" ON "learning_paths"("lesson_id");
+CREATE INDEX "student_lesson_progress_lesson_id_idx" ON "student_lesson_progress"("lesson_id");
+CREATE INDEX "student_lesson_progress_student_id_completed_idx" ON "student_lesson_progress"("student_id", "completed");
+CREATE INDEX "assignments_course_id_idx" ON "assignments"("course_id");
+CREATE INDEX "assignments_lesson_id_idx" ON "assignments"("lesson_id");
+CREATE INDEX "assignments_created_by_idx" ON "assignments"("created_by");
+CREATE INDEX "assignments_deadline_idx" ON "assignments"("deadline");
+CREATE INDEX "assignment_submissions_student_id_idx" ON "assignment_submissions"("student_id");
+CREATE INDEX "assignment_submissions_status_idx" ON "assignment_submissions"("status");
+CREATE INDEX "notifications_student_id_read_at_idx" ON "notifications"("student_id", "read_at");
+CREATE INDEX "schedule_items_student_id_starts_at_idx" ON "schedule_items"("student_id", "starts_at");

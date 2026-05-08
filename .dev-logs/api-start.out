@@ -1,0 +1,9 @@
+
+> lms-coach-mvp@0.1.0 start:api
+> npm run start --workspace @lms/api
+
+
+> @lms/api@0.1.0 start
+> node dist/server.js
+
+API server listening on http://localhost:4000
