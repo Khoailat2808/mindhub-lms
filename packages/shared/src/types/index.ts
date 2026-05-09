@@ -45,7 +45,10 @@ export interface QuestionDto {
   id: number;
   lessonId: number;
   questionType: QuestionType;
-  content: string;
+  content?: string | null;
+  imageUrl?: string | null;
+  imageOriginalName?: string | null;
+  imageMimeType?: string | null;
   optionA?: string | null;
   optionB?: string | null;
   optionC?: string | null;

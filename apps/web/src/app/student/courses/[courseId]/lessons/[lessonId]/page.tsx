@@ -229,9 +229,22 @@ function QuestionBlock({
   onAnswer: (value: string) => void;
   question: Question;
 }) {
+  const imageSrc = question.imageUrl?.startsWith("http")
+    ? question.imageUrl
+    : question.imageUrl
+      ? `${fileBaseUrl}${question.imageUrl}`
+      : null;
+
   return (
     <div className="rounded-3xl border border-[#d8e5f6] bg-[#f8fbff] p-4">
-      <p className="font-bold text-brand">{question.content}</p>
+      {question.content ? <p className="font-bold text-brand">{question.content}</p> : null}
+      {imageSrc ? (
+        <img
+          alt={question.imageOriginalName ?? "Hình câu hỏi"}
+          className="mt-3 max-h-[520px] w-full rounded-2xl border border-[#d8e5f6] bg-white object-contain"
+          src={imageSrc}
+        />
+      ) : null}
       {question.questionType === "multiple_choice" ? (
         <div className="mt-3 grid gap-2">
           {(["A", "B", "C", "D"] as const).map((key) => {

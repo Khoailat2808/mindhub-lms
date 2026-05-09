@@ -1,4 +1,16 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mindhub
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -6,16 +18,22 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
-      DATABASE_URL: ${DATABASE_URL:-file:/data/mindhub.db}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/mindhub?schema=public}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
       BCRYPT_SALT_ROUNDS: ${BCRYPT_SALT_ROUNDS:-12}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       UPLOAD_VIDEO_DIR: /data/uploads/videos
       UPLOAD_MATERIAL_DIR: /data/uploads/materials
+      UPLOAD_QUESTION_IMAGE_DIR: /data/uploads/question-images
       MAX_VIDEO_UPLOAD_MB: ${MAX_VIDEO_UPLOAD_MB:-100}
       MAX_MATERIAL_UPLOAD_MB: ${MAX_MATERIAL_UPLOAD_MB:-20}
       MAX_LESSON_MATERIALS_TOTAL_MB: ${MAX_LESSON_MATERIALS_TOTAL_MB:-50}
+      MAX_QUESTION_IMAGE_UPLOAD_MB: ${MAX_QUESTION_IMAGE_UPLOAD_MB:-5}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+      CLOUDINARY_FOLDER: ${CLOUDINARY_FOLDER:-mindhub/question-images}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@mindhub.test}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@12345}
@@ -24,6 +42,8 @@ services:
     volumes:
       - api-data:/data
     restart: unless-stopped
+    depends_on:
+      - db
 
   web:
     build:
@@ -42,3 +62,4 @@ services:
 
 volumes:
   api-data:
+  postgres-data:

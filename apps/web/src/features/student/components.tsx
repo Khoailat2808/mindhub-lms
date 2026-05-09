@@ -211,7 +211,7 @@ export function CourseCard({ item }: { item: CourseCardData }) {
       href={`/student/courses/${item.course.id}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <span className="rounded-2xl bg-[#eaf2ff] px-3 py-1 text-xs font-bold text-brand">{item.course.subject.name}</span>
+        <span className="rounded-2xl bg-[#eaf2ff] px-3 py-1 text-xs font-bold text-brand">{item.course.subject?.name ?? "MindHub"}</span>
         <span className="rounded-2xl bg-[#fff3e8] px-3 py-1 text-xs font-bold text-brandOrange">{status}</span>
       </div>
       <h3 className="mt-4 text-xl font-bold text-brand group-hover:text-[#06265a]">{item.course.title}</h3>
@@ -281,7 +281,7 @@ export function AssignmentCard({ assignment, onAction }: { assignment: Assignmen
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <span className="rounded-2xl bg-[#eaf2ff] px-3 py-1 text-xs font-bold text-brand">
-            {assignment.course?.subject.name ?? assignment.subject?.name ?? "MindHub"}
+            {assignment.course?.subject?.name ?? assignment.subject?.name ?? "MindHub"}
           </span>
           <h3 className="mt-3 text-lg font-bold text-brand">{assignment.title}</h3>
           <p className="mt-2 text-sm leading-6 text-[#66758d]">{assignment.description}</p>

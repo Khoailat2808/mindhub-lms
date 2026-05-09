@@ -4,7 +4,8 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { getAssignments, startAssignment, submitAssignment } from "@/features/student/api";
 import { AssignmentCard, EmptyState, LoadingState, Pagination, SectionCard } from "@/features/student/components";
-import type { Assignment, PaginatedResponse } from "@/features/student/types";
+import type { Assignment, PaginatedResponse, Question } from "@/features/student/types";
+import { fileBaseUrl } from "@/lib/api-client";
 
 const statusOptions = [
   { value: "", label: "Tất cả trạng thái" },
@@ -104,6 +105,13 @@ export default function StudentAssignmentsPage() {
           <form className="w-full max-w-2xl rounded-[32px] bg-white p-6 shadow-[0_30px_90px_rgba(8,47,111,0.25)]" onSubmit={handleSubmit}>
             <h2 className="text-2xl font-bold text-brand">{activeAssignment.title}</h2>
             <p className="mt-2 text-sm leading-6 text-[#66758d]">{activeAssignment.description}</p>
+            {activeAssignment.questions && activeAssignment.questions.length > 0 ? (
+              <div className="mt-5 max-h-80 space-y-3 overflow-y-auto rounded-3xl border border-[#d8e5f6] bg-[#f8fbff] p-4">
+                {activeAssignment.questions.map((question, index) => (
+                  <AssignmentQuestionPreview index={index} key={question.id} question={question} />
+                ))}
+              </div>
+            ) : null}
             <textarea
               className="mt-5 min-h-56 w-full rounded-3xl border border-[#d8e5f6] p-4 text-sm leading-6 outline-none focus:border-brandOrange focus:ring-4 focus:ring-brandOrange/15"
               onChange={(event) => setAnswerText(event.target.value)}
@@ -120,6 +128,40 @@ export default function StudentAssignmentsPage() {
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AssignmentQuestionPreview({ index, question }: { index: number; question: Question }) {
+  const imageSrc = question.imageUrl?.startsWith("http")
+    ? question.imageUrl
+    : question.imageUrl
+      ? `${fileBaseUrl}${question.imageUrl}`
+      : null;
+
+  return (
+    <div className="rounded-2xl bg-white p-3 text-sm">
+      <p className="font-bold text-brand">Câu {index + 1}</p>
+      {question.content ? <p className="mt-1 leading-6 text-[#536179]">{question.content}</p> : null}
+      {imageSrc ? (
+        <img
+          alt={question.imageOriginalName ?? "Hình câu hỏi"}
+          className="mt-3 max-h-72 w-full rounded-2xl border border-[#d8e5f6] object-contain"
+          src={imageSrc}
+        />
+      ) : null}
+      {question.questionType === "multiple_choice" ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {(["A", "B", "C", "D"] as const).map((key) => {
+            const label = question[`option${key}` as keyof Question] as string | null | undefined;
+            return label ? (
+              <div className="rounded-2xl bg-[#f5f9ff] px-3 py-2" key={key}>
+                {key}. {label}
+              </div>
+            ) : null;
+          })}
         </div>
       ) : null}
     </div>

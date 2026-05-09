@@ -73,7 +73,7 @@ export default function StudentDashboardPage() {
         <SectionCard title="Tiếp tục học">
           {continueLesson ? (
             <div>
-              <p className="text-sm font-bold text-brandOrange">{continueLesson.lesson.course.subject.name}</p>
+              <p className="text-sm font-bold text-brandOrange">{continueLesson.lesson.course.subject?.name ?? "MindHub"}</p>
               <h3 className="mt-2 text-2xl font-bold text-brand">{continueLesson.lesson.title}</h3>
               <p className="mt-2 text-sm leading-6 text-[#66758d]">{continueLesson.lesson.description}</p>
               <div className="mt-5">

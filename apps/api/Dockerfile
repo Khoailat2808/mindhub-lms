@@ -22,6 +22,6 @@ RUN npm ci --omit=dev --workspace @lms/shared --workspace @lms/api
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/apps/api/dist apps/api/dist
 COPY --from=build /app/apps/api/prisma apps/api/prisma
-RUN mkdir -p /data/uploads/videos /data/uploads/materials
+RUN mkdir -p /data/uploads/videos /data/uploads/materials /data/uploads/question-images
 EXPOSE 4000
 CMD ["npm", "run", "start:railway", "--workspace", "@lms/api"]

@@ -9,16 +9,22 @@ API:
 ```bash
 NODE_ENV=production
 PORT=4000
-DATABASE_URL="file:/data/mindhub.db"
+DATABASE_URL="postgresql://USER:PASSWORD@HOST:PORT/DB?schema=public"
 JWT_SECRET="generate-a-long-random-secret"
 JWT_EXPIRES_IN="7d"
 BCRYPT_SALT_ROUNDS=12
 CORS_ORIGIN="https://your-web-domain.com"
 UPLOAD_VIDEO_DIR="/data/uploads/videos"
 UPLOAD_MATERIAL_DIR="/data/uploads/materials"
+UPLOAD_QUESTION_IMAGE_DIR="/data/uploads/question-images"
 MAX_VIDEO_UPLOAD_MB=100
 MAX_MATERIAL_UPLOAD_MB=20
 MAX_LESSON_MATERIALS_TOTAL_MB=50
+MAX_QUESTION_IMAGE_UPLOAD_MB=5
+CLOUDINARY_CLOUD_NAME="your-cloudinary-cloud"
+CLOUDINARY_API_KEY="your-cloudinary-api-key"
+CLOUDINARY_API_SECRET="your-cloudinary-api-secret"
+CLOUDINARY_FOLDER="mindhub/question-images"
 ADMIN_USERNAME="admin"
 ADMIN_EMAIL="admin@your-domain.com"
 ADMIN_PASSWORD="replace-before-public-use"
@@ -66,7 +72,7 @@ For later production deploys, prefer Prisma deploy migrations from the API works
 npx prisma migrate deploy --schema apps/api/prisma/schema.prisma
 ```
 
-Only run seed in production when you intentionally want demo data. Change `ADMIN_PASSWORD` before seeding any public environment.
+Only run seed in production when you intentionally want demo data. The seed script refuses production by default; set `ALLOW_PRODUCTION_SEED=true` only for an intentional demo reset. Change `ADMIN_PASSWORD` before seeding any public environment.
 
 ## Docker Compose
 
@@ -78,11 +84,11 @@ docker compose exec api npx prisma migrate deploy --schema apps/api/prisma/schem
 docker compose exec api npm run db:seed --workspace @lms/api
 ```
 
-The compose file stores SQLite and uploads in named volumes.
+The compose file stores PostgreSQL data and local development uploads in named volumes.
 
 ## Railway Deployment
 
-Railway works well for this MVP if the API service has a persistent volume mounted at `/data`.
+Railway works well for this MVP with a Railway PostgreSQL plugin/database and Cloudinary for question images.
 
 Create a Railway project with two empty services:
 
@@ -93,23 +99,30 @@ For `mindhub-api` service settings:
 
 - Root Directory: leave empty / repository root (`/`)
 - Config file path: `/railway.api.json`
-- Add a volume mounted at `/data`
+- Add a Railway PostgreSQL database and connect its `DATABASE_URL` to this service.
+- A volume at `/data` is optional for local video/material uploads, but question images should use Cloudinary in production.
 - Public networking enabled
 - Variables:
 
 ```bash
 NODE_ENV=production
 PORT=4000
-DATABASE_URL=file:/data/mindhub.db
+DATABASE_URL=${{Postgres.DATABASE_URL}}
 JWT_SECRET=<long-random-secret>
 JWT_EXPIRES_IN=7d
 BCRYPT_SALT_ROUNDS=12
 CORS_ORIGIN=https://<mindhub-web>.up.railway.app
 UPLOAD_VIDEO_DIR=/data/uploads/videos
 UPLOAD_MATERIAL_DIR=/data/uploads/materials
+UPLOAD_QUESTION_IMAGE_DIR=/data/uploads/question-images
 MAX_VIDEO_UPLOAD_MB=100
 MAX_MATERIAL_UPLOAD_MB=20
 MAX_LESSON_MATERIALS_TOTAL_MB=50
+MAX_QUESTION_IMAGE_UPLOAD_MB=5
+CLOUDINARY_CLOUD_NAME=<cloudinary-cloud-name>
+CLOUDINARY_API_KEY=<cloudinary-api-key>
+CLOUDINARY_API_SECRET=<cloudinary-api-secret>
+CLOUDINARY_FOLDER=mindhub/question-images
 ADMIN_USERNAME=admin
 ADMIN_EMAIL=admin@mindhub.test
 ADMIN_PASSWORD=<temporary-strong-password>
@@ -134,19 +147,19 @@ railway up --service mindhub-api
 railway up --service mindhub-web
 ```
 
-After the API deploys, run one-time migration and seed from the Railway shell or service command:
+After the API deploys, migrations run through `start:railway`. You can also run them manually from the Railway shell:
 
 ```bash
 npx prisma migrate deploy --schema apps/api/prisma/schema.prisma
 npm run db:seed --workspace @lms/api
 ```
 
-Only run seed while this is a demo database. It resets demo data.
+Only run seed while this is a demo database. It resets demo data and requires `ALLOW_PRODUCTION_SEED=true` when `NODE_ENV=production`.
 
 ## Suggested Hosting
 
 - Small VPS: Docker Compose behind Nginx, easiest for SQLite uploads.
-- Render/Fly.io/Railway: deploy API and web as separate services, attach persistent disk for API SQLite/uploads.
+- Render/Fly.io/Railway: deploy API and web as separate services, use managed PostgreSQL for application data, and use Cloudinary/S3/Supabase Storage for production images.
 - Vercel for web plus VPS/Render for API works, but remember to set `NEXT_PUBLIC_API_BASE_URL` and CORS correctly.
 
 ## Nginx Reverse Proxy Example

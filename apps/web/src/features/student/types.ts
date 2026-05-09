@@ -8,7 +8,7 @@ export interface Course {
   title: string;
   description?: string | null;
   teacherName?: string | null;
-  subject: Subject;
+  subject?: Subject | null;
 }
 
 export interface CourseCardData {
@@ -26,11 +26,15 @@ export interface Material {
 export interface Question {
   id: number;
   questionType: "multiple_choice" | "short_answer";
-  content: string;
+  content?: string | null;
+  imageUrl?: string | null;
+  imageOriginalName?: string | null;
+  imageMimeType?: string | null;
   optionA?: string | null;
   optionB?: string | null;
   optionC?: string | null;
   optionD?: string | null;
+  score?: number | null;
 }
 
 export interface Lesson {
@@ -101,6 +105,7 @@ export interface Assignment {
   subject?: Subject | null;
   course?: Course | null;
   lesson?: Lesson | null;
+  questions?: Question[];
   submission?: AssignmentSubmission | null;
   studentStatus: AssignmentSubmission["status"];
   overdue: boolean;

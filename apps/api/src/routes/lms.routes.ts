@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
 import { Router } from "express";
-import type { Prisma, Question } from "@prisma/client";
+import type { AssignmentQuestion, Prisma, Question } from "@prisma/client";
 import { isQuestionType, isVideoType, type QuestionType } from "@lms/shared";
 
 import { env } from "../config/env.js";
@@ -15,7 +15,8 @@ import {
 import { sensitiveRouteRateLimit } from "../middlewares/security.js";
 import { gradeAnswers } from "../utils/grade.js";
 import { HttpError } from "../utils/http-error.js";
-import { toPublicUploadPath, uploadLessonFiles } from "../utils/uploads.js";
+import { storeQuestionImage, type StoredQuestionImage } from "../utils/question-image-storage.js";
+import { toPublicUploadPath, uploadAssignmentFiles, uploadLessonFiles } from "../utils/uploads.js";
 
 export const lmsRoutes = Router();
 
@@ -235,6 +236,18 @@ function parseStudentIds(body: Record<string, unknown>) {
   return studentIds;
 }
 
+function parseBoolean(value: unknown, fallback: boolean) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    return value === "true" ? true : value === "false" ? false : fallback;
+  }
+
+  return fallback;
+}
+
 async function validateStudentIds(tx: Prisma.TransactionClient, studentIds: number[]) {
   if (studentIds.length === 0) {
     return;
@@ -309,12 +322,27 @@ function validateVideo(videoType: string, videoUrl: string | null, videoFile?: E
   return null;
 }
 
-function validateQuestions(rawQuestions: unknown[]) {
+type QuestionImageLookup = Map<number, StoredQuestionImage>;
+
+function imageForQuestion(question: Record<string, unknown>, images: QuestionImageLookup) {
+  const imageUploadIndex = parseOptionalPositiveInt(question.imageUploadIndex);
+  const uploaded = imageUploadIndex ? images.get(imageUploadIndex) : undefined;
+  const existingImageUrl = optionalString(question.imageUrl);
+
+  return {
+    imageUrl: uploaded?.imageUrl ?? existingImageUrl,
+    imagePublicId: uploaded?.imagePublicId ?? optionalString(question.imagePublicId),
+    imageOriginalName: uploaded?.imageOriginalName ?? optionalString(question.imageOriginalName),
+    imageMimeType: uploaded?.imageMimeType ?? optionalString(question.imageMimeType)
+  };
+}
+
+function validateQuestions(rawQuestions: unknown[], images: QuestionImageLookup = new Map()) {
   if (rawQuestions.length > 20) {
     throw new HttpError(400, "Each lesson can have at most 20 questions.");
   }
 
-  return rawQuestions.map((raw) => {
+  return rawQuestions.map((raw, index) => {
     const question = raw as Record<string, unknown>;
     const questionType = requireString(question.questionType, "questionType");
 
@@ -322,29 +350,53 @@ function validateQuestions(rawQuestions: unknown[]) {
       throw new HttpError(400, "Invalid question type.");
     }
 
-    const content = requireString(question.content, "content");
+    const content = optionalString(question.content);
+    const image = imageForQuestion(question, images);
+    if (!content && !image.imageUrl) {
+      throw new HttpError(400, "Question must include text or an image.");
+    }
+
     const correctAnswer = requireString(question.correctAnswer, "correctAnswer");
+    const explanation = optionalString(question.explanation);
+    const score = parseOptionalPositiveInt(question.score) ?? 1;
 
     if (questionType === "multiple_choice") {
+      const options = {
+        optionA: requireString(question.optionA, "optionA"),
+        optionB: requireString(question.optionB, "optionB"),
+        optionC: optionalString(question.optionC),
+        optionD: optionalString(question.optionD)
+      };
+      const correctKey = correctAnswer.toUpperCase();
+      const correctOption = options[`option${correctKey}` as keyof typeof options];
+      if (!["A", "B", "C", "D"].includes(correctKey) || !correctOption) {
+        throw new HttpError(400, "Correct answer must point to a non-empty option.");
+      }
+
       return {
         questionType,
         content,
-        optionA: requireString(question.optionA, "optionA"),
-        optionB: requireString(question.optionB, "optionB"),
-        optionC: requireString(question.optionC, "optionC"),
-        optionD: requireString(question.optionD, "optionD"),
-        correctAnswer: correctAnswer.toUpperCase()
+        ...image,
+        ...options,
+        correctAnswer: correctKey,
+        explanation,
+        score,
+        orderIndex: index + 1
       };
     }
 
     return {
       questionType,
       content,
+      ...image,
       optionA: null,
       optionB: null,
       optionC: null,
       optionD: null,
-      correctAnswer
+      correctAnswer,
+      explanation,
+      score,
+      orderIndex: index + 1
     };
   });
 }
@@ -354,13 +406,30 @@ function getUploadedFiles(request: AuthenticatedRequest) {
     | {
         videoFile?: Express.Multer.File[];
         materials?: Express.Multer.File[];
+        questionImages?: Express.Multer.File[];
       }
     | undefined;
 
   return {
     videoFile: files?.videoFile?.[0],
-    materials: files?.materials ?? []
+    materials: files?.materials ?? [],
+    questionImages: files?.questionImages ?? []
   };
+}
+
+async function buildQuestionImageLookup(files: Express.Multer.File[]) {
+  const maxBytes = env.maxQuestionImageUploadMb * 1024 * 1024;
+  for (const file of files) {
+    if (file.size > maxBytes) {
+      throw new HttpError(400, `Question image ${file.originalname} exceeds ${env.maxQuestionImageUploadMb}MB.`);
+    }
+  }
+
+  const entries = await Promise.all(
+    files.map(async (file, index) => [index + 1, await storeQuestionImage(file)] as const)
+  );
+
+  return new Map(entries);
 }
 
 function assertMaterialLimits(existingBytes: number, files: Express.Multer.File[]) {
@@ -412,7 +481,16 @@ function courseDto<TCourse extends { enrollments?: { student: { id: number } }[]
 function hideCorrectAnswers<TLesson extends { questions?: Question[] }>(lesson: TLesson) {
   return {
     ...lesson,
-    questions: lesson.questions?.map(({ correctAnswer: _correctAnswer, ...question }) => question) ?? []
+    questions:
+      lesson.questions?.map(({ correctAnswer: _correctAnswer, explanation: _explanation, ...question }) => question) ??
+      []
+  };
+}
+
+function hideAssignmentCorrectAnswers<TAssignment extends { questions?: AssignmentQuestion[] }>(assignment: TAssignment) {
+  return {
+    ...assignment,
+    questions: assignment.questions?.map(({ correctAnswer: _correctAnswer, explanation: _explanation, ...question }) => question) ?? []
   };
 }
 
@@ -697,7 +775,7 @@ lmsRoutes.post(
     const course = await prisma.$transaction(async (tx) => {
       const created = await tx.course.create({
         data: {
-          subjectId: parsePositiveInt(request.body.subjectId, "subjectId"),
+          subjectId: parseOptionalPositiveInt(request.body.subjectId),
           title: requireString(request.body.title, "title"),
           description: optionalString(request.body.description),
           teacherName:
@@ -828,7 +906,8 @@ lmsRoutes.post(
   teacherRoles,
   uploadLessonFiles.fields([
     { name: "videoFile", maxCount: 1 },
-    { name: "materials", maxCount: 10 }
+    { name: "materials", maxCount: 10 },
+    { name: "questionImages", maxCount: 20 }
   ]),
   asyncRoute(async (request, response) => {
     const files = getUploadedFiles(request);
@@ -845,7 +924,11 @@ lmsRoutes.post(
     const videoType = requireString(request.body.videoType, "videoType");
     const videoUrl = optionalString(request.body.videoUrl);
     const videoFilePath = validateVideo(videoType, videoUrl, files.videoFile);
-    const questions = validateQuestions(parseJsonArray<Record<string, unknown>>(request.body.questions, "questions"));
+    const questionImages = await buildQuestionImageLookup(files.questionImages);
+    const questions = validateQuestions(
+      parseJsonArray<Record<string, unknown>>(request.body.questions, "questions"),
+      questionImages
+    );
 
     const lesson = await prisma.lesson.create({
       data: {
@@ -879,7 +962,8 @@ lmsRoutes.patch(
   teacherRoles,
   uploadLessonFiles.fields([
     { name: "videoFile", maxCount: 1 },
-    { name: "materials", maxCount: 10 }
+    { name: "materials", maxCount: 10 },
+    { name: "questionImages", maxCount: 20 }
   ]),
   asyncRoute(async (request, response) => {
     const lessonId = parsePositiveInt(request.params.lessonId, "lessonId");
@@ -909,7 +993,8 @@ lmsRoutes.patch(
       ? validateVideo(videoType, videoUrl, files.videoFile)
       : existing.videoFilePath;
     const rawQuestions = parseJsonArray<Record<string, unknown>>(request.body.questions, "questions");
-    const questions = rawQuestions.length > 0 ? validateQuestions(rawQuestions) : null;
+    const questionImages = await buildQuestionImageLookup(files.questionImages);
+    const questions = rawQuestions.length > 0 ? validateQuestions(rawQuestions, questionImages) : null;
 
     const lesson = await prisma.$transaction(async (tx) => {
       if (questions) {
@@ -1194,6 +1279,7 @@ function assignmentIncludeForTeacher() {
     subject: true,
     course: { include: { subject: true } },
     lesson: true,
+    questions: { orderBy: { orderIndex: "asc" as const } },
     submissions: {
       include: {
         student: { select: { id: true, username: true, email: true, fullName: true, role: true } }
@@ -1304,7 +1390,9 @@ lmsRoutes.post(
   "/assignments",
   requireAuth,
   teacherRoles,
+  uploadAssignmentFiles.fields([{ name: "questionImages", maxCount: 30 }]),
   asyncRoute(async (request, response) => {
+    const files = getUploadedFiles(request);
     const courseId = parseOptionalPositiveInt(request.body.courseId);
     const lessonId = parseOptionalPositiveInt(request.body.lessonId);
 
@@ -1316,6 +1404,16 @@ lmsRoutes.post(
         throw new HttpError(404, "Course not found.");
       }
     }
+
+    if (!courseId) {
+      throw new HttpError(400, "courseId is required.");
+    }
+
+    const questionImages = await buildQuestionImageLookup(files.questionImages);
+    const questions = validateQuestions(
+      parseJsonArray<Record<string, unknown>>(request.body.questions, "questions"),
+      questionImages
+    );
 
     const assignment = await prisma.assignment.create({
       data: {
@@ -1330,7 +1428,8 @@ lmsRoutes.post(
           : null,
         maxScore: parseOptionalPositiveInt(request.body.maxScore) ?? 10,
         createdBy: request.user!.id,
-        isPublished: request.body.isPublished !== false
+        isPublished: parseBoolean(request.body.isPublished, true),
+        questions: { create: questions }
       },
       include: assignmentIncludeForTeacher()
     });
@@ -1343,7 +1442,9 @@ lmsRoutes.patch(
   "/assignments/:assignmentId",
   requireAuth,
   teacherRoles,
+  uploadAssignmentFiles.fields([{ name: "questionImages", maxCount: 30 }]),
   asyncRoute(async (request, response) => {
+    const files = getUploadedFiles(request);
     const assignmentId = parsePositiveInt(request.params.assignmentId, "assignmentId");
     const existing = await prisma.assignment.findFirst({
       where: { id: assignmentId, ...teacherAssignmentWhere(request.user) }
@@ -1353,17 +1454,31 @@ lmsRoutes.patch(
       throw new HttpError(404, "Assignment not found.");
     }
 
-    const assignment = await prisma.assignment.update({
-      where: { id: assignmentId },
-      data: {
-        title: optionalString(request.body.title) ?? existing.title,
-        description: optionalString(request.body.description) ?? existing.description,
-        deadline: optionalString(request.body.deadline) ? new Date(requireString(request.body.deadline, "deadline")) : existing.deadline,
-        maxScore: parseOptionalPositiveInt(request.body.maxScore) ?? existing.maxScore,
-        isPublished:
-          typeof request.body.isPublished === "boolean" ? request.body.isPublished : existing.isPublished
-      },
-      include: assignmentIncludeForTeacher()
+    const shouldReplaceQuestions = Object.prototype.hasOwnProperty.call(request.body, "questions");
+    const questionImages = await buildQuestionImageLookup(files.questionImages);
+    const questions = shouldReplaceQuestions
+      ? validateQuestions(parseJsonArray<Record<string, unknown>>(request.body.questions, "questions"), questionImages)
+      : null;
+
+    const assignment = await prisma.$transaction(async (tx) => {
+      if (questions) {
+        await tx.assignmentQuestion.deleteMany({ where: { assignmentId } });
+      }
+
+      return tx.assignment.update({
+        where: { id: assignmentId },
+        data: {
+          title: optionalString(request.body.title) ?? existing.title,
+          description: optionalString(request.body.description) ?? existing.description,
+          deadline: optionalString(request.body.deadline)
+            ? new Date(requireString(request.body.deadline, "deadline"))
+            : existing.deadline,
+          maxScore: parseOptionalPositiveInt(request.body.maxScore) ?? existing.maxScore,
+          isPublished: parseBoolean(request.body.isPublished, existing.isPublished),
+          ...(questions ? { questions: { create: questions } } : {})
+        },
+        include: assignmentIncludeForTeacher()
+      });
     });
 
     response.json({ assignment });
@@ -1478,6 +1593,7 @@ function assignmentIncludeForStudent(studentId: number) {
     subject: true,
     course: { include: { subject: true } },
     lesson: true,
+    questions: { orderBy: { orderIndex: "asc" as const } },
     submissions: { where: { studentId }, take: 1 }
   } satisfies Prisma.AssignmentInclude;
 }
@@ -1491,6 +1607,7 @@ function toStudentAssignment<TAssignment extends {
     gradedAt: Date | null;
     answerText: string | null;
   }[];
+  questions?: AssignmentQuestion[];
   deadline: Date | null;
 }>(assignment: TAssignment) {
   const [submission] = assignment.submissions;
@@ -1498,6 +1615,7 @@ function toStudentAssignment<TAssignment extends {
 
   return {
     ...assignment,
+    questions: assignment.questions?.map(({ correctAnswer: _correctAnswer, explanation: _explanation, ...question }) => question) ?? [],
     submissions: undefined,
     submission: submission
       ? {
@@ -1830,7 +1948,7 @@ lmsRoutes.get(
     const bySubject = new Map<string, { subject: string; completedLessons: number; totalLessons: number }>();
 
     for (const item of path) {
-      const subject = item.lesson.course.subject.name;
+      const subject = item.lesson.course.subject?.name ?? "Chung";
       const current = bySubject.get(subject) ?? { subject, completedLessons: 0, totalLessons: 0 };
       current.totalLessons += 1;
       current.completedLessons += completedLessonIds.has(item.lessonId) ? 1 : 0;

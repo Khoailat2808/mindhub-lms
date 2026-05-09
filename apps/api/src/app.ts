@@ -51,6 +51,7 @@ app.use(
   })
 );
 app.use("/uploads/materials", express.static(uploadDirs.materials));
+app.use("/uploads/question-images", express.static(uploadDirs.questionImages));
 
 app.use("/api", apiRoutes);
 

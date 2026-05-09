@@ -13,7 +13,14 @@ export const MATERIAL_MIME_TYPES = [
   "application/vnd.ms-powerpoint",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "image/jpeg",
-  "image/png"
+  "image/png",
+  "image/webp"
+] as const;
+
+export const QUESTION_IMAGE_MIME_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp"
 ] as const;
 
 export const VIDEO_MIME_TYPES = [

@@ -52,7 +52,7 @@ export default function StudentCourseDetailPage() {
         </Link>
         <div className="mt-4 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
           <div>
-            <p className="text-sm font-bold uppercase tracking-wide text-brandOrange">{course.course.subject.name}</p>
+            <p className="text-sm font-bold uppercase tracking-wide text-brandOrange">{course.course.subject?.name ?? "MindHub"}</p>
             <h2 className="mt-2 text-3xl font-bold text-brand md:text-4xl">{course.course.title}</h2>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-[#66758d]">{course.course.description}</p>
             <p className="mt-4 text-sm font-bold text-[#536179]">Giáo viên: {course.course.teacherName ?? "MindHub Coach"}</p>

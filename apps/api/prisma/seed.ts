@@ -124,11 +124,16 @@ function addDays(days: number, hour = 19, minute = 30) {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_PRODUCTION_SEED !== "true") {
+    throw new Error("Refusing to seed production without ALLOW_PRODUCTION_SEED=true.");
+  }
+
   await prisma.$transaction([
     prisma.scheduleItem.deleteMany(),
     prisma.notification.deleteMany(),
     prisma.studentLessonNote.deleteMany(),
     prisma.assignmentSubmission.deleteMany(),
+    prisma.assignmentQuestion.deleteMany(),
     prisma.assignment.deleteMany(),
     prisma.studentLessonProgress.deleteMany(),
     prisma.learningPath.deleteMany(),

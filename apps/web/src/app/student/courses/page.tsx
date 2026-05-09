@@ -30,7 +30,7 @@ export default function StudentCoursesPage() {
       const progress = percent(item.completedLessons, item.totalLessons);
       const currentStatus = progress === 100 ? "Hoàn thành" : progress > 0 ? "Đang học" : "Chưa bắt đầu";
       const subjectMatches =
-        subject === "Tất cả" || item.course.subject.name.toLowerCase().includes(subject.toLowerCase());
+        subject === "Tất cả" || (item.course.subject?.name ?? "MindHub").toLowerCase().includes(subject.toLowerCase());
       const statusMatches = status === "Tất cả" || status === currentStatus;
       const text = `${item.course.title} ${item.course.description ?? ""} ${item.course.teacherName ?? ""}`.toLowerCase();
       return subjectMatches && statusMatches && text.includes(search.toLowerCase());

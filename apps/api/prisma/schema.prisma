@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -46,13 +46,13 @@ model Subject {
 
 model Course {
   id          Int      @id @default(autoincrement())
-  subjectId   Int      @map("subject_id")
+  subjectId   Int?     @map("subject_id")
   title       String
   description String?
   teacherName String?  @map("teacher_name")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
-  subject     Subject  @relation(fields: [subjectId], references: [id])
+  subject     Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
   lessons     Lesson[]
   assignments Assignment[]
   scheduleItems ScheduleItem[]
@@ -108,12 +108,19 @@ model Question {
   id            Int      @id @default(autoincrement())
   lessonId      Int      @map("lesson_id")
   questionType  String   @map("question_type")
-  content       String
+  content       String?
+  imageUrl      String?  @map("image_url")
+  imagePublicId String?  @map("image_public_id")
+  imageOriginalName String? @map("image_original_name")
+  imageMimeType String?  @map("image_mime_type")
   optionA       String?  @map("option_a")
   optionB       String?  @map("option_b")
   optionC       String?  @map("option_c")
   optionD       String?  @map("option_d")
   correctAnswer String   @map("correct_answer")
+  explanation   String?
+  score         Int?     @default(1)
+  orderIndex    Int      @default(1) @map("order_index")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
   lesson        Lesson   @relation(fields: [lessonId], references: [id])
@@ -220,12 +227,38 @@ model Assignment {
   lesson      Lesson?  @relation(fields: [lessonId], references: [id])
   creator     User     @relation("AssignmentCreator", fields: [createdBy], references: [id])
   submissions AssignmentSubmission[]
+  questions   AssignmentQuestion[]
 
   @@index([courseId])
   @@index([lessonId])
   @@index([createdBy])
   @@index([deadline])
   @@map("assignments")
+}
+
+model AssignmentQuestion {
+  id            Int      @id @default(autoincrement())
+  assignmentId  Int      @map("assignment_id")
+  questionType  String   @map("question_type")
+  content       String?
+  imageUrl      String?  @map("image_url")
+  imagePublicId String?  @map("image_public_id")
+  imageOriginalName String? @map("image_original_name")
+  imageMimeType String?  @map("image_mime_type")
+  optionA       String?  @map("option_a")
+  optionB       String?  @map("option_b")
+  optionC       String?  @map("option_c")
+  optionD       String?  @map("option_d")
+  correctAnswer String   @map("correct_answer")
+  explanation   String?
+  score         Int?     @default(1)
+  orderIndex    Int      @default(1) @map("order_index")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  assignment    Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@index([assignmentId])
+  @@map("assignment_questions")
 }
 
 model AssignmentSubmission {
