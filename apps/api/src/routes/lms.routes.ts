@@ -580,8 +580,8 @@ async function updateStreak(studentId: number) {
 }
 
 async function studentStats(studentId: number) {
-  const [assigned, completed, streak] = await Promise.all([
-    prisma.learningPath.count({ where: { studentId } }),
+  const [availablePath, completed, streak] = await Promise.all([
+    studentAvailablePath(studentId),
     prisma.studentLessonProgress.findMany({
       where: { studentId, completed: true },
       select: { score: true, totalQuestions: true }
@@ -594,7 +594,7 @@ async function studentStats(studentId: number) {
   const currentStreak = streak?.currentStreak ?? 0;
 
   return {
-    assignedLessons: assigned,
+    assignedLessons: availablePath.length,
     completedLessons: completed.length,
     averageScore: totalQuestions > 0 ? Math.round((totalScore / totalQuestions) * 100) : 0,
     currentStreak,
@@ -1300,6 +1300,134 @@ function teacherAssignmentWhere(user: AuthenticatedUser | undefined): Prisma.Ass
   };
 }
 
+async function studentAvailablePath(studentId: number) {
+  const [path, enrollments] = await Promise.all([
+    prisma.learningPath.findMany({
+      where: { studentId, lesson: { isActive: true } },
+      orderBy: { orderIndex: "asc" },
+      include: { lesson: { include: lessonInclude() } }
+    }),
+    prisma.courseStudent.findMany({
+      where: { studentId },
+      orderBy: { createdAt: "asc" },
+      include: {
+        course: {
+          include: {
+            lessons: {
+              where: { isActive: true },
+              orderBy: { createdAt: "asc" },
+              include: lessonInclude()
+            }
+          }
+        }
+      }
+    })
+  ]);
+
+  const items = [...path];
+  const seenLessonIds = new Set(path.map((item) => item.lessonId));
+
+  for (const enrollment of enrollments) {
+    for (const lesson of enrollment.course.lessons) {
+      if (seenLessonIds.has(lesson.id)) {
+        continue;
+      }
+
+      items.push({
+        id: -lesson.id,
+        studentId,
+        lessonId: lesson.id,
+        orderIndex: items.length + 1,
+        assignedBy: enrollment.assignedBy ?? studentId,
+        createdAt: enrollment.createdAt,
+        updatedAt: enrollment.createdAt,
+        lesson
+      });
+      seenLessonIds.add(lesson.id);
+    }
+  }
+
+  return items;
+}
+
+async function studentCoursePath(studentId: number, courseId: number) {
+  const [enrollment, path, lessons] = await Promise.all([
+    prisma.courseStudent.findUnique({
+      where: { courseId_studentId: { courseId, studentId } },
+      select: { id: true, assignedBy: true, createdAt: true }
+    }),
+    prisma.learningPath.findMany({
+      where: { studentId, lesson: { courseId, isActive: true } },
+      orderBy: { orderIndex: "asc" },
+      include: { lesson: { include: lessonInclude() } }
+    }),
+    prisma.lesson.findMany({
+      where: { courseId, isActive: true },
+      orderBy: { createdAt: "asc" },
+      include: lessonInclude()
+    })
+  ]);
+
+  if (!enrollment && path.length === 0) {
+    throw new HttpError(403, "Course is not assigned to this student.");
+  }
+
+  if (!enrollment) {
+    return path;
+  }
+
+  const items = [...path];
+  const seenLessonIds = new Set(path.map((item) => item.lessonId));
+
+  for (const lesson of lessons) {
+    if (seenLessonIds.has(lesson.id)) {
+      continue;
+    }
+
+    items.push({
+      id: -lesson.id,
+      studentId,
+      lessonId: lesson.id,
+      orderIndex: items.length + 1,
+      assignedBy: enrollment.assignedBy ?? studentId,
+      createdAt: enrollment.createdAt,
+      updatedAt: enrollment.createdAt,
+      lesson
+    });
+    seenLessonIds.add(lesson.id);
+  }
+
+  return items;
+}
+
+async function assertCanAccessStudentLesson(studentId: number, lessonId: number) {
+  const lesson = await prisma.lesson.findUnique({
+    where: { id: lessonId },
+    include: lessonInclude()
+  });
+
+  if (!lesson || !lesson.isActive) {
+    throw new HttpError(404, "Lesson not found.");
+  }
+
+  const [assigned, enrolled] = await Promise.all([
+    prisma.learningPath.findUnique({
+      where: { studentId_lessonId: { studentId, lessonId } },
+      select: { id: true }
+    }),
+    prisma.courseStudent.findUnique({
+      where: { courseId_studentId: { courseId: lesson.courseId, studentId } },
+      select: { id: true }
+    })
+  ]);
+
+  if (!assigned && !enrolled) {
+    throw new HttpError(403, "Lesson is not assigned to this student.");
+  }
+
+  return lesson;
+}
+
 lmsRoutes.get(
   "/teacher/dashboard",
   requireAuth,
@@ -1552,13 +1680,14 @@ async function studentCourseAndLessonIds(studentId: number) {
     }),
     prisma.courseStudent.findMany({
       where: { studentId },
-      select: { courseId: true }
+      include: { course: { include: { lessons: { where: { isActive: true }, select: { id: true } } } } }
     })
   ]);
+  const enrolledLessonIds = enrollments.flatMap((item) => item.course.lessons.map((lesson) => lesson.id));
 
   return {
     courseIds: Array.from(new Set([...path.map((item) => item.lesson.courseId), ...enrollments.map((item) => item.courseId)])),
-    lessonIds: path.map((item) => item.lessonId)
+    lessonIds: Array.from(new Set([...path.map((item) => item.lessonId), ...enrolledLessonIds]))
   };
 }
 
@@ -1685,11 +1814,7 @@ lmsRoutes.get(
     const [stats, leaderboard, path, notifications, schedule, assignments, profile] = await Promise.all([
       studentStats(studentId),
       buildLeaderboard(),
-      prisma.learningPath.findMany({
-        where: { studentId },
-        orderBy: { orderIndex: "asc" },
-        include: { lesson: { include: lessonInclude() } }
-      }),
+      studentAvailablePath(studentId),
       prisma.notification.findMany({
         where: { studentId },
         orderBy: { createdAt: "desc" },
@@ -1780,22 +1905,10 @@ lmsRoutes.get(
   asyncRoute(async (request, response) => {
     const studentId = request.user!.id;
     const courseId = parsePositiveInt(request.params.courseId, "courseId");
-    const [enrollment, path, progress] = await Promise.all([
-      prisma.courseStudent.findUnique({
-        where: { courseId_studentId: { courseId, studentId } },
-        select: { id: true }
-      }),
-      prisma.learningPath.findMany({
-        where: { studentId, lesson: { courseId, isActive: true } },
-        orderBy: { orderIndex: "asc" },
-        include: { lesson: { include: lessonInclude() } }
-      }),
+    const [path, progress] = await Promise.all([
+      studentCoursePath(studentId, courseId),
       prisma.studentLessonProgress.findMany({ where: { studentId } })
     ]);
-
-    if (!enrollment && path.length === 0) {
-      throw new HttpError(403, "Course is not assigned to this student.");
-    }
 
     response.json({ path: hidePathCorrectAnswers(path), progress });
   })
@@ -1932,11 +2045,7 @@ lmsRoutes.get(
     const studentId = request.user!.id;
     const [stats, path, progress] = await Promise.all([
       studentStats(studentId),
-      prisma.learningPath.findMany({
-        where: { studentId, lesson: { isActive: true } },
-        orderBy: { orderIndex: "asc" },
-        include: { lesson: { include: { course: { include: { subject: true } } } } }
-      }),
+      studentAvailablePath(studentId),
       prisma.studentLessonProgress.findMany({
         where: { studentId },
         orderBy: { updatedAt: "desc" },
@@ -2047,23 +2156,11 @@ lmsRoutes.get(
   asyncRoute(async (request, response) => {
     const studentId = request.user!.id;
     const lessonId = parsePositiveInt(request.params.lessonId, "lessonId");
-    const assigned = await prisma.learningPath.findUnique({
-      where: { studentId_lessonId: { studentId, lessonId } }
-    });
-
-    if (!assigned) {
-      throw new HttpError(403, "Lesson is not assigned to this student.");
-    }
-
-    const [lesson, progress, note] = await Promise.all([
-      prisma.lesson.findUnique({ where: { id: lessonId }, include: lessonInclude() }),
+    const lesson = await assertCanAccessStudentLesson(studentId, lessonId);
+    const [progress, note] = await Promise.all([
       prisma.studentLessonProgress.findUnique({ where: { studentId_lessonId: { studentId, lessonId } } }),
       prisma.studentLessonNote.findUnique({ where: { studentId_lessonId: { studentId, lessonId } } })
     ]);
-
-    if (!lesson || !lesson.isActive) {
-      throw new HttpError(404, "Lesson not found.");
-    }
 
     response.json({ lesson: hideCorrectAnswers(lesson), progress, note });
   })
@@ -2077,13 +2174,7 @@ lmsRoutes.put(
     const studentId = request.user!.id;
     const lessonId = parsePositiveInt(request.params.lessonId, "lessonId");
     const content = typeof request.body.content === "string" ? request.body.content : "";
-    const assigned = await prisma.learningPath.findUnique({
-      where: { studentId_lessonId: { studentId, lessonId } }
-    });
-
-    if (!assigned) {
-      throw new HttpError(403, "Lesson is not assigned to this student.");
-    }
+    await assertCanAccessStudentLesson(studentId, lessonId);
 
     const note = await prisma.studentLessonNote.upsert({
       where: { studentId_lessonId: { studentId, lessonId } },
@@ -2102,13 +2193,7 @@ lmsRoutes.post(
   asyncRoute(async (request, response) => {
     const studentId = request.user!.id;
     const lessonId = parsePositiveInt(request.params.lessonId, "lessonId");
-    const assigned = await prisma.learningPath.findUnique({
-      where: { studentId_lessonId: { studentId, lessonId } }
-    });
-
-    if (!assigned) {
-      throw new HttpError(403, "Lesson is not assigned to this student.");
-    }
+    await assertCanAccessStudentLesson(studentId, lessonId);
 
     const questions = await prisma.question.findMany({ where: { lessonId }, orderBy: { id: "asc" } });
     const answers = (request.body.answers ?? {}) as Record<string, string>;
